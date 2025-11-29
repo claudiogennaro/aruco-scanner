@@ -5,70 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>ArUco 4x4 Scanner</title>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: #222;
-            color: white;
-            font-family: sans-serif;
-            overflow: hidden;
-        }
-
-        #container {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background-color: #000;
-        }
-
-        #videoInput {
-            display: none; 
-        }
-
-        #canvasOutput {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-        }
-
+        body { margin: 0; padding: 0; background-color: #111; color: white; font-family: sans-serif; overflow: hidden; }
+        #container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; background-color: #000; }
+        #videoInput { display: none; }
+        #canvasOutput { width: 100%; height: 100%; object-fit: contain; }
+        
+        /* UI Overlay */
         #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.8);
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            z-index: 10;
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(20, 20, 20, 0.9); padding: 30px; border-radius: 15px;
+            text-align: center; z-index: 20; border: 1px solid #444; width: 80%; max-width: 300px;
         }
-
+        #status { margin-top: 15px; font-size: 0.9rem; color: #ccc; }
+        
         #infoPanel {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.6);
-            padding: 15px;
-            border-radius: 8px;
-            pointer-events: none;
+            position: absolute; bottom: 20px; left: 20px; right: 20px;
+            background: rgba(0, 0, 0, 0.7); padding: 15px; border-radius: 12px;
+            pointer-events: none; backdrop-filter: blur(5px); border: 1px solid rgba(255,255,255,0.1);
         }
+        h3 { margin: 0 0 8px 0; font-size: 1.1em; color: #00ffcc; }
+        p { margin: 4px 0; font-size: 0.9em; display: flex; justify-content: space-between; }
+        .val { font-weight: bold; color: #ffeb3b; font-family: monospace; font-size: 1.1em; }
 
-        h3 { margin: 0 0 10px 0; font-size: 1.1em; color: #00ffcc; }
-        p { margin: 5px 0; font-size: 0.9em; }
-        .highlight { color: #ffeb3b; font-weight: bold; }
-
+        /* Spinner */
         .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #3498db;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px auto;
+            border: 4px solid #333; border-top: 4px solid #00ffcc; border-radius: 50%;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
@@ -78,35 +40,52 @@
 <div id="container">
     <div id="loading">
         <div class="spinner"></div>
-        <div id="status">Downloading OpenCV (8MB)...<br>Please wait.</div>
+        <div id="status">Connecting to CDN...</div>
     </div>
     
     <video id="videoInput" playsinline webkit-playsinline></video>
     <canvas id="canvasOutput"></canvas>
 
     <div id="infoPanel">
-        <h3>ArUco 4x4 Data</h3>
-        <p>Status: <span id="fps" class="highlight">-</span></p>
-        <p>Detected: <span id="count" class="highlight">0</span></p>
-        <p>IDs: <span id="ids" class="highlight">None</span></p>
+        <h3>ArUco Data</h3>
+        <p>FPS: <span id="fps" class="val">-</span></p>
+        <p>Count: <span id="count" class="val">0</span></p>
+        <p>IDs: <span id="ids" class="val">--</span></p>
     </div>
 </div>
 
 <!-- 
-    FIX: Using a build hosted by the University of Washington (Makeability Lab) 
-    that is known to include the ArUco 'contrib' modules. 
+    CRITICAL: Configuration for OpenCV.js 
+    We must define 'Module' BEFORE loading the script so it knows what to do when ready.
 -->
-<script async src="https://makeabilitylab.github.io/physcomp/common/opencv_js/opencv_js_4.5.4/opencv.js" onload="onOpenCvReady()" type="text/javascript"></script>
+<script>
+    var Module = {
+        onRuntimeInitialized: function() {
+            console.log("OpenCV Runtime Initialized");
+            onOpenCvReady();
+        },
+        onError: function(err) {
+            document.getElementById('status').innerText = "OpenCV Error: " + err;
+        }
+    };
+</script>
+
+<!-- 
+    Load OpenCV with Contrib (ArUco) from jsDelivr 
+    This is a reliable high-speed CDN.
+-->
+<script async src="https://cdn.jsdelivr.net/npm/@jgoenetxea/opencv-contrib-js/opencv.js" onerror="onScriptError()"></script>
 
 <script type="text/javascript">
-    let video = document.getElementById('videoInput');
-    let canvas = document.getElementById('canvasOutput');
-    let statusMsg = document.getElementById('status');
-    let loadingDiv = document.getElementById('loading');
+    const video = document.getElementById('videoInput');
+    const canvas = document.getElementById('canvasOutput');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const statusMsg = document.getElementById('status');
+    const loadingDiv = document.getElementById('loading');
     
-    let fpsSpan = document.getElementById('fps');
-    let countSpan = document.getElementById('count');
-    let idsSpan = document.getElementById('ids');
+    const fpsSpan = document.getElementById('fps');
+    const countSpan = document.getElementById('count');
+    const idsSpan = document.getElementById('ids');
 
     let stream = null;
     let streaming = false;
@@ -122,11 +101,13 @@
     let rvecs = null;
     let tvecs = null;
 
+    function onScriptError() {
+        statusMsg.innerText = "Failed to load OpenCV from CDN. Check internet connection.";
+        statusMsg.style.color = "red";
+    }
+
     function onOpenCvReady() {
-        if (cv.getBuildInformation) {
-            console.log(cv.getBuildInformation());
-        }
-        statusMsg.innerText = "OpenCV Loaded. Starting Camera...";
+        statusMsg.innerText = "OpenCV Ready. Starting Camera...";
         startCamera();
     }
 
@@ -148,60 +129,52 @@
             video.onloadedmetadata = function() {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
-                initOpenCV();
+                initArUco();
             };
         } catch (err) {
-            statusMsg.innerText = "Error: " + err.message;
+            statusMsg.innerText = "Camera Error: " + err.message;
             if(window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
-                alert("Camera requires HTTPS. Please use GitHub Pages.");
+                alert("HTTPS is required for Camera access.");
             }
         }
     }
 
-    function initOpenCV() {
-        statusMsg.innerText = "Initializing ArUco...";
+    function initArUco() {
+        statusMsg.innerText = "Initializing Detector...";
         
+        // Setup Matrices
         src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
         dst = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
         gray = new cv.Mat();
-        
         cap = new cv.VideoCapture(video);
         
         corners = new cv.MatVector();
         ids = new cv.Mat();
         
-        // --- ARUCO INITIALIZATION ---
-        // We check where 'aruco' is located in this build
-        if (!cv.aruco) {
-            statusMsg.innerText = "Error: 'cv.aruco' module is missing in this build.";
-            return;
-        }
-
-        // Use 4x4 Dictionary (1000 markers)
-        // If this fails, we will fallback to standard DICT_4X4_50
+        // Initialize ArUco 4x4 Dictionary
+        // Try/Catch block to handle different OpenCV version syntaxes
         try {
-            dictionary = new cv.aruco.Dictionary(cv.aruco.DICT_4X4_1000);
+            // New syntax for 4.x
+            dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_1000);
         } catch (e) {
-            console.warn("Retrying with alternate dictionary init...");
             try {
-                // Fallback for different OpenCV versions
-                dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_1000);
-            } catch(e2) {
-                statusMsg.innerText = "Error creating ArUco Dictionary.";
+                // Older syntax
+                dictionary = new cv.aruco.Dictionary(cv.aruco.DICT_4X4_1000);
+            } catch (e2) {
+                statusMsg.innerText = "Error: Could not load ArUco Dictionary. " + e2;
                 return;
             }
         }
 
         parameter = new cv.aruco.DetectorParameters();
-        
-        // Tune parameters for better detection
+        // Optimization for performance
         parameter.adaptiveThreshWinSizeMin = 3;
         parameter.adaptiveThreshWinSizeMax = 23;
         parameter.adaptiveThreshWinSizeStep = 10;
-        parameter.minMarkerPerimeterRate = 0.03;
 
-        streaming = true;
+        // Hide loading screen and start loop
         loadingDiv.style.display = "none";
+        streaming = true;
         requestAnimationFrame(processVideo);
     }
 
@@ -211,6 +184,7 @@
     function processVideo(now) {
         if (!streaming) return;
 
+        // Simple FPS throttle
         if (now - lastTime < 1000 / FPS) {
             requestAnimationFrame(processVideo);
             return;
@@ -219,60 +193,56 @@
 
         try {
             cap.read(src);
-            src.copyTo(dst);
             
-            // Convert to grayscale for detection (improves stability)
+            // Convert to grayscale for detection (faster, more reliable)
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
-            // Detect
+            // Detect Markers
+            // detectMarkers(image, dictionary, corners, ids, parameters, rejectedImgPoints)
             cv.aruco.detectMarkers(gray, dictionary, corners, ids, parameter);
 
+            // Draw results on the original color image
+            src.copyTo(dst);
+
             if (ids.rows > 0) {
-                // Draw detected markers
                 cv.aruco.drawDetectedMarkers(dst, corners, ids);
-                updateInfoPanel(ids);
+                updateInfo(ids);
             } else {
-                updateInfoPanel(null);
+                updateInfo(null);
             }
 
             cv.imshow('canvasOutput', dst);
-            fpsSpan.innerText = "Running";
+            fpsSpan.innerText = "ON";
 
         } catch (err) {
             console.error(err);
-            fpsSpan.innerText = "Error in Loop";
+            fpsSpan.innerText = "ERR";
         }
 
         requestAnimationFrame(processVideo);
     }
 
-    function updateInfoPanel(foundIds) {
+    function updateInfo(foundIds) {
         if (!foundIds || foundIds.rows === 0) {
             countSpan.innerText = "0";
-            idsSpan.innerText = "None";
+            idsSpan.innerText = "--";
             return;
         }
 
         let count = foundIds.rows;
         let idList = [];
-        
         for (let i = 0; i < count; ++i) {
             idList.push(foundIds.data32S[i]);
         }
-
         countSpan.innerText = count;
         idsSpan.innerText = idList.join(", ");
     }
 
-    // Cleanup
+    // Cleanup memory when leaving
     window.addEventListener('beforeunload', () => {
-        if(src) src.delete();
-        if(dst) dst.delete();
-        if(gray) gray.delete();
-        if(corners) corners.delete();
-        if(ids) ids.delete();
-        if(dictionary) dictionary.delete();
-        if(parameter) parameter.delete();
+        if(src) src.delete(); if(dst) dst.delete(); if(gray) gray.delete();
+        if(corners) corners.delete(); if(ids) ids.delete();
+        if(dictionary) dictionary.delete(); if(parameter) parameter.delete();
     });
 </script>
 </body>
