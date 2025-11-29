@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ArUco 4x4 Scanner</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #222;
+            color: white;
+            font-family: sans-serif;
+            overflow: hidden; /* Prevent scrolling */
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000;
+        }
+
+        /* The hidden video element used for capture */
+        #videoInput {
+            display: none; 
+        }
+
+        /* The canvas where we draw the video + markers */
+        #canvasOutput {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        /* UI Overlays */
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 10;
+        }
+
+        #infoPanel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none; /* Let clicks pass through */
+        }
+
+        h3 { margin: 0 0 10px 0; font-size: 1.1em; color: #00ffcc; }
+        p { margin: 5px 0; font-size: 0.9em; }
+        .highlight { color: #ffeb3b; font-weight: bold; }
+
+        /* Spinner for loading */
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <div id="loading">
+        <div class="spinner"></div>
+        <div id="status">Loading OpenCV...</div>
+    </div>
+    
+    <video id="videoInput" playsinline webkit-playsinline></video>
+    <canvas id="canvasOutput"></canvas>
+
+    <div id="infoPanel">
+        <h3>ArUco 4x4 Data</h3>
+        <p>Status: <span id="fps" class="highlight">-</span></p>
+        <p>Detected Count: <span id="count" class="highlight">0</span></p>
+        <p>IDs: <span id="ids" class="highlight">None</span></p>
+    </div>
+</div>
+
+<!-- Load OpenCV.js -->
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()" type="text/javascript"></script>
+
+<script type="text/javascript">
+    let video = document.getElementById('videoInput');
+    let canvas = document.getElementById('canvasOutput');
+    let ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let statusMsg = document.getElementById('status');
+    let loadingDiv = document.getElementById('loading');
+    
+    // UI Elements
+    let fpsSpan = document.getElementById('fps');
+    let countSpan = document.getElementById('count');
+    let idsSpan = document.getElementById('ids');
+
+    let stream = null;
+    let streaming = false;
+    
+    // OpenCV variables
+    let cap = null;
+    let src = null;
+    let dst = null; // We will convert to RGB for display
+    let dictionary = null;
+    let parameter = null;
+    let corners = null;
+    let ids = null;
+    let rvecs = null;
+    let tvecs = null;
+
+    function onOpenCvReady() {
+        statusMsg.innerText = "OpenCV Ready. Requesting Camera...";
+        startCamera();
+    }
+
+    async function startCamera() {
+        try {
+            const constraints = {
+                audio: false,
+                video: {
+                    facingMode: 'environment', // Prefer rear camera on mobile
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            };
+            
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = stream;
+            video.play();
+            
+            video.onloadedmetadata = function() {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                initOpenCV();
+            };
+        } catch (err) {
+            statusMsg.innerText = "Error: " + err.message;
+            console.error("Camera Error:", err);
+            // Help user for common HTTP vs HTTPS error
+            if(window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                alert("Camera access requires HTTPS or localhost.");
+            }
+        }
+    }
+
+    function initOpenCV() {
+        statusMsg.innerText = "Initializing ArUco...";
+        
+        // Initialize Mats
+        // CV_8UC4 = 8-bit unsigned, 4 channels (RGBA)
+        src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+        dst = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+        
+        cap = new cv.VideoCapture(video);
+
+        // Define ArUco dictionary (4x4)
+        // Note: OpenCV.js constants might differ slightly depending on version, 
+        // but 4.x usually puts aruco in cv object directly or cv.aruco
+        
+        // 4x4 Dictionary with 50 markers (common standard) or 250, 1000
+        // We will try to load DICT_4X4_1000 to cover most bases
+        try {
+            dictionary = new cv.aruco_Dictionary(cv.aruco.DICT_4X4_1000);
+            parameter = new cv.aruco_DetectorParameters();
+            
+            // Refine parameters for better detection if needed
+            parameter.adaptiveThreshWinSizeMin = 3;
+            parameter.adaptiveThreshWinSizeMax = 23;
+            parameter.adaptiveThreshWinSizeStep = 10;
+        } catch(e) {
+            statusMsg.innerText = "Error loading ArUco module. Your browser might not support this OpenCV build.";
+            return;
+        }
+
+        corners = new cv.MatVector();
+        ids = new cv.Mat();
+        rvecs = new cv.Mat();
+        tvecs = new cv.Mat();
+
+        streaming = true;
+        loadingDiv.style.display = "none";
+        
+        requestAnimationFrame(processVideo);
+    }
+
+    const FPS = 30;
+    let lastTime = 0;
+
+    function processVideo(now) {
+        if (!streaming) return;
+
+        // Limit FPS to save battery on mobile
+        if (now - lastTime < 1000 / FPS) {
+            requestAnimationFrame(processVideo);
+            return;
+        }
+        lastTime = now;
+
+        try {
+            // 1. Read video frame
+            cap.read(src);
+
+            // 2. Convert to Grayscale for detection (optional, but detectMarkers handles it usually)
+            // However, we pass the RGB src to detectMarkers, it converts internally.
+            
+            // 3. Detect Markers
+            // detectMarkers(image, dictionary, corners, ids, parameters, rejectedImgPoints)
+            cv.aruco.detectMarkers(src, dictionary, corners, ids, parameter);
+
+            // 4. Draw result on the source image
+            // We copy src to dst so we can draw on dst without modifying the original immediately if needed
+            src.copyTo(dst);
+            
+            if (ids.rows > 0) {
+                // Draw markers (Bounding Box + Axis usually, here just box and ID)
+                cv.aruco.drawDetectedMarkers(dst, corners, ids);
+                
+                // Update UI Info
+                updateInfoPanel(ids);
+            } else {
+                updateInfoPanel(null);
+            }
+
+            // 5. Show image on canvas
+            cv.imshow('canvasOutput', dst);
+
+            fpsSpan.innerText = "Running";
+
+        } catch (err) {
+            console.error(err);
+            fpsSpan.innerText = "Error";
+        }
+
+        requestAnimationFrame(processVideo);
+    }
+
+    function updateInfoPanel(foundIds) {
+        if (!foundIds || foundIds.rows === 0) {
+            countSpan.innerText = "0";
+            idsSpan.innerText = "None";
+            return;
+        }
+
+        let count = foundIds.rows;
+        let idList = [];
+        
+        // ids is a Mat of type CV_32SC1 (32-bit signed int, 1 channel)
+        for (let i = 0; i < count; ++i) {
+            let id = foundIds.data32S[i];
+            idList.push(id);
+        }
+
+        countSpan.innerText = count;
+        idsSpan.innerText = idList.join(", ");
+    }
+
+    // Cleanup on unload
+    window.addEventListener('beforeunload', () => {
+        if(src) src.delete();
+        if(dst) dst.delete();
+        if(corners) corners.delete();
+        if(ids) ids.delete();
+        if(dictionary) dictionary.delete();
+        if(parameter) parameter.delete();
+        if(rvecs) rvecs.delete();
+        if(tvecs) tvecs.delete();
+    });
+
+</script>
+</body>
+</html>
